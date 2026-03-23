@@ -178,7 +178,7 @@ class _MuMuPaiHomeState extends State<MuMuPaiHome> with WindowListener, TrayList
     }
     if (_isAndroid) _audioPlayer = ja.AudioPlayer();
     _loadSession();
-    if (!_isAndroid) _initSystemTray();
+    if (!_isAndroid && !Platform.isWindows) _initSystemTray();
     if (!_isAndroid) _checkFirstLaunch();
   }
 
@@ -231,12 +231,27 @@ class _MuMuPaiHomeState extends State<MuMuPaiHome> with WindowListener, TrayList
   // === FIRST LAUNCH INSTALL DIALOG ===
   static String get _installedMarker => '$_configDir/.installed';
 
+  bool get _isInstalledInstance {
+    // Prüfe ob WIR die installierte Version sind
+    try {
+      final marker = File(_installedMarker);
+      if (!marker.existsSync()) return false;
+      final content = marker.readAsStringSync();
+      final pathLine = content.split('\n').firstWhere((l) => l.startsWith('path='), orElse: () => '');
+      if (pathLine.isEmpty) return false;
+      final installedPath = pathLine.substring(5);
+      final myDir = p.dirname(Platform.resolvedExecutable);
+      // Wenn wir AUS dem installierten Ordner gestartet wurden → installierte Version
+      return p.normalize(myDir).startsWith(p.normalize(installedPath));
+    } catch (_) { return false; }
+  }
+
   Future<void> _checkFirstLaunch() async {
-    // Warte bis UI bereit
     await Future.delayed(const Duration(milliseconds: 500));
     if (!mounted) return;
-    if (File(_installedMarker).existsSync()) return;
-
+    // Installierte Version → nie fragen
+    if (_isInstalledInstance) return;
+    // Original/Portable → IMMER fragen
     final choice = await showDialog<String>(
       context: context,
       barrierDismissible: false,
@@ -262,13 +277,6 @@ class _MuMuPaiHomeState extends State<MuMuPaiHome> with WindowListener, TrayList
     if (choice == 'install') {
       await _performInstall();
     }
-
-    // Marker setzen (auch bei portable — nicht nochmal fragen)
-    try {
-      final dir = Directory(_configDir);
-      if (!dir.existsSync()) dir.createSync(recursive: true);
-      await File(_installedMarker).writeAsString('mode=${choice ?? "portable"}\ndate=${DateTime.now()}');
-    } catch (_) {}
   }
 
   Future<void> _performInstall() async {
@@ -311,6 +319,13 @@ class _MuMuPaiHomeState extends State<MuMuPaiHome> with WindowListener, TrayList
       } else if (Platform.isLinux) {
         await _createLinuxDesktopEntry(installDir);
       }
+
+      // Marker mit Pfad speichern
+      try {
+        final dir = Directory(_configDir);
+        if (!dir.existsSync()) dir.createSync(recursive: true);
+        await File(_installedMarker).writeAsString('path=$installDir\ndate=${DateTime.now()}');
+      } catch (_) {}
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
