@@ -133,8 +133,40 @@ jobs:
           name: MuMuPai-macOS
           path: Flutter/MuMuPai-macOS.zip
 
+  build-android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.41.5'
+          channel: 'stable'
+
+      - name: Build APK
+        run: |
+          cd Flutter
+          flutter pub get
+          flutter build apk --release
+
+      - name: Rename APK
+        run: mv Flutter/build/app/outputs/flutter-apk/app-release.apk MuMuPai.apk
+
+      - name: Upload Android
+        uses: actions/upload-artifact@v4
+        with:
+          name: MuMuPai-Android
+          path: MuMuPai.apk
+
   release:
-    needs: [build-linux, build-windows, build-macos]
+    needs: [build-linux, build-windows, build-macos, build-android]
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
     permissions:
@@ -150,6 +182,7 @@ jobs:
             MuMuPai-Linux/MuMuPai-x86_64.AppImage
             MuMuPai-Windows/MuMuPai-Windows.zip
             MuMuPai-macOS/MuMuPai-macOS.zip
+            MuMuPai-Android/MuMuPai.apk
           body: |
             ## 🎵 MuMuPai — Dein Musik-Player mit Streaming!
 
@@ -162,6 +195,7 @@ jobs:
             | 🐧 Linux | `MuMuPai-x86_64.AppImage` | Doppelklick! (ffmpeg nötig) |
             | 🪟 Windows | `MuMuPai-Windows.zip` | Entpacken → mumupai.exe starten |
             | 🍎 macOS | `MuMuPai-macOS.zip` | Entpacken → MuMuPai.app starten |
+            | 🤖 Android | `MuMuPai.apk` | Installieren + öffnen |
 
             ### ✨ Features
 
