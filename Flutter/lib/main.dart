@@ -31,11 +31,30 @@ void _globalCleanup() {
     try { Process.runSync('pkill', ['-f', 'ffplay.*-nodisp.*-autoexit']); } catch (_) {}
   } else if (Platform.isWindows) {
     try { Process.runSync('taskkill', ['/F', '/IM', 'ffplay.exe']); } catch (_) {}
+    try { Process.runSync('taskkill', ['/F', '/IM', 'ffplay']); } catch (_) {}
   }
 }
 
+// Bundled ffplay/ffprobe Pfade ermitteln
+String _findBundledBinary(String name) {
+  final exeDir = p.dirname(Platform.resolvedExecutable);
+  // Prüfe: neben der exe in ffmpeg/
+  final bundled = p.join(exeDir, 'ffmpeg', Platform.isWindows ? '$name.exe' : name);
+  if (File(bundled).existsSync()) return bundled;
+  // macOS: in .app/Contents/MacOS/ffmpeg/
+  final macBundle = p.join(exeDir, 'ffmpeg', name);
+  if (File(macBundle).existsSync()) return macBundle;
+  // Fallback: System PATH
+  return name;
+}
+
+late final String ffplayBin;
+late final String ffprobeBin;
+
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  ffplayBin = _findBundledBinary('ffplay');
+  ffprobeBin = _findBundledBinary('ffprobe');
 
   if (Platform.isLinux || Platform.isMacOS) {
     ProcessSignal.sigterm.watch().listen((_) { _globalCleanup(); exit(0); });
@@ -408,7 +427,7 @@ class _MuMuPaiHomeState extends State<MuMuPaiHome> with WindowListener, TrayList
       setState(() { currentIndex = index; isPlaying = true; position = Duration(seconds: seekSeconds); });
 
       try {
-        final probe = await Process.run('ffprobe', ['-v', 'quiet', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', path]);
+        final probe = await Process.run(ffprobeBin, ['-v', 'quiet', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', path]);
         final dur = double.tryParse(probe.stdout.toString().trim()) ?? 0;
         if (mounted) setState(() => duration = Duration(milliseconds: (dur * 1000).round()));
       } catch (_) {}
@@ -416,7 +435,7 @@ class _MuMuPaiHomeState extends State<MuMuPaiHome> with WindowListener, TrayList
       final args = ['-nodisp', '-autoexit', '-loglevel', 'quiet', '-volume', volume.round().toString()];
       if (seekSeconds > 0) args.addAll(['-ss', seekSeconds.toString()]);
       args.add(path);
-      _playerProcess = await Process.start('ffplay', args);
+      _playerProcess = await Process.start(ffplayBin, args);
       _saveSession();
 
       final startTime = DateTime.now();
