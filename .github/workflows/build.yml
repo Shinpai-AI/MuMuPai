@@ -65,10 +65,10 @@ jobs:
           export LD_LIBRARY_PATH="$HERE/usr/bin/lib:$LD_LIBRARY_PATH"
           export PATH="$HERE/usr/bin/ffmpeg:$PATH"
           APPIMAGE_PATH="$(readlink -f "$0" 2>/dev/null || echo "$APPIMAGE")"
-          INSTALL_DIR="$HOME/.local/share/mumupai"
+          DEFAULT_DIR="$HOME/.local/share/mumupai"
           MARKER="$HOME/.config/mumupai/.installed"
 
-          # === INSTALL CHECK ===
+          # === FIRST LAUNCH: Portable oder Install? ===
           if [ ! -f "$MARKER" ] && [ -n "$APPIMAGE_PATH" ]; then
             CHOICE=$(zenity --list --radiolist \
               --title="MuMuPai" \
@@ -79,7 +79,13 @@ jobs:
               --width=450 --height=280 2>/dev/null)
 
             if [ "$CHOICE" = "install" ]; then
-              echo "Installiere MuMuPai..."
+              # Pfad wählen
+              INSTALL_DIR=$(zenity --file-selection --directory \
+                --title="Installationsordner wählen (Default: $DEFAULT_DIR)" \
+                --filename="$DEFAULT_DIR/" 2>/dev/null)
+              [ -z "$INSTALL_DIR" ] && INSTALL_DIR="$DEFAULT_DIR"
+
+              echo "Installiere nach: $INSTALL_DIR"
               mkdir -p "$INSTALL_DIR"
               cp "$APPIMAGE_PATH" "$INSTALL_DIR/MuMuPai.AppImage" 2>/dev/null
               chmod +x "$INSTALL_DIR/MuMuPai.AppImage"
@@ -104,25 +110,24 @@ jobs:
               mkdir -p "$ICON_DIR"
               cp "$HERE/mumupai.png" "$ICON_DIR/mumupai.png" 2>/dev/null
 
-              # Launcher
+              # CLI Launcher
               mkdir -p "$HOME/.local/bin"
-              echo "#!/bin/bash" > "$HOME/.local/bin/mumupai"
-              echo "exec \"$INSTALL_DIR/MuMuPai.AppImage\" \"\$@\"" >> "$HOME/.local/bin/mumupai"
+              printf '#!/bin/bash\nexec "%s/MuMuPai.AppImage" "$@"\n' "$INSTALL_DIR" > "$HOME/.local/bin/mumupai"
               chmod +x "$HOME/.local/bin/mumupai"
 
-              # Update caches
+              # Caches
               update-desktop-database "$HOME/.local/share/applications" 2>/dev/null
               gtk-update-icon-cache -f -t "$HOME/.local/share/icons/hicolor" 2>/dev/null
 
-              # Marker setzen
+              # Marker
               mkdir -p "$HOME/.config/mumupai"
-              echo "installed=$(date)" > "$MARKER"
+              printf 'installed=%s\npath=%s\n' "$(date)" "$INSTALL_DIR" > "$MARKER"
 
-              zenity --info --text="MuMuPai installiert!\n\nStartmenü: MuMuPai\nTerminal: mumupai\n\nStarte jetzt..." --title="MuMuPai" --width=300 2>/dev/null
+              zenity --info --text="MuMuPai installiert!\n\nOrdner: $INSTALL_DIR\nStartmenü: MuMuPai\nTerminal: mumupai\n\nStarte jetzt..." --title="MuMuPai" --width=350 2>/dev/null
             fi
           fi
 
-          # === ICON (auch bei portable) ===
+          # Icon (auch portable)
           ICON_DIR="$HOME/.local/share/icons/hicolor/512x512/apps"
           mkdir -p "$ICON_DIR" 2>/dev/null
           cp "$HERE/mumupai.png" "$ICON_DIR/mumupai.png" 2>/dev/null
@@ -167,6 +172,56 @@ jobs:
           New-Item -ItemType Directory -Path $destDir -Force
           Copy-Item "$binDir\ffplay.exe" $destDir
           Copy-Item "$binDir\ffprobe.exe" $destDir
+        shell: pwsh
+
+      - name: Create Install Script
+        run: |
+          $installScript = @'
+          Add-Type -AssemblyName System.Windows.Forms
+          $title = "MuMuPai Installer"
+          $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+          $defaultDir = Join-Path $env:APPDATA "MuMuPai"
+
+          $result = [System.Windows.Forms.MessageBox]::Show(
+            "Willkommen bei MuMuPai!`n`nMoechtest du MuMuPai installieren?`n(Desktop-Verknuepfung + Startmenue)`n`nOder einfach mumupai.exe starten fuer Portable-Modus.",
+            $title, "YesNo", "Question")
+
+          if ($result -eq "Yes") {
+            $folder = New-Object System.Windows.Forms.FolderBrowserDialog
+            $folder.Description = "Installationsordner waehlen"
+            $folder.SelectedPath = $defaultDir
+            if ($folder.ShowDialog() -eq "OK") { $installDir = $folder.SelectedPath }
+            else { $installDir = $defaultDir }
+
+            Write-Host "Installiere nach: $installDir"
+            New-Item -ItemType Directory -Path $installDir -Force | Out-Null
+            Copy-Item "$scriptDir\*" $installDir -Recurse -Force
+
+            # Desktop Shortcut
+            $desktop = [Environment]::GetFolderPath("Desktop")
+            $shell = New-Object -ComObject WScript.Shell
+            $shortcut = $shell.CreateShortcut("$desktop\MuMuPai.lnk")
+            $shortcut.TargetPath = "$installDir\mumupai.exe"
+            $shortcut.IconLocation = "$installDir\mumupai.exe,0"
+            $shortcut.WorkingDirectory = $installDir
+            $shortcut.Save()
+
+            # Start Menu
+            $startMenu = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs"
+            $shortcut2 = $shell.CreateShortcut("$startMenu\MuMuPai.lnk")
+            $shortcut2.TargetPath = "$installDir\mumupai.exe"
+            $shortcut2.IconLocation = "$installDir\mumupai.exe,0"
+            $shortcut2.WorkingDirectory = $installDir
+            $shortcut2.Save()
+
+            [System.Windows.Forms.MessageBox]::Show(
+              "MuMuPai installiert!`n`nOrdner: $installDir`nDesktop + Startmenue Verknuepfung erstellt!`n`nStarte jetzt...",
+              $title, "OK", "Information")
+
+            Start-Process "$installDir\mumupai.exe"
+          }
+          '@
+          Set-Content -Path "Flutter\build\windows\x64\runner\Release\Install-MuMuPai.ps1" -Value $installScript
         shell: pwsh
 
       - name: Package Windows
