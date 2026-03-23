@@ -1,0 +1,179 @@
+name: Build MuMuPai
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.41.5'
+          channel: 'stable'
+
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang cmake ninja-build pkg-config libgtk-3-dev libfuse2 libayatana-appindicator3-dev
+
+      - name: Build Linux
+        run: |
+          cd Flutter
+          flutter pub get
+          flutter build linux --release
+
+      - name: Build AppImage
+        run: |
+          curl -fsSL -o appimagetool https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+          chmod +x appimagetool
+
+          mkdir -p MuMuPai.AppDir/usr/bin
+          mkdir -p MuMuPai.AppDir/usr/share/icons/hicolor/512x512/apps
+          cp -r Flutter/build/linux/x64/release/bundle/* MuMuPai.AppDir/usr/bin/
+          cp Flutter/assets/icon.png MuMuPai.AppDir/mumupai.png
+          cp Flutter/assets/icon.png MuMuPai.AppDir/usr/share/icons/hicolor/512x512/apps/mumupai.png
+
+          cat > MuMuPai.AppDir/mumupai.desktop << 'EOF'
+          [Desktop Entry]
+          Name=MuMuPai
+          Comment=Dein Musik-Player mit Streaming! by Shinpai-AI
+          Exec=mumupai
+          Icon=mumupai
+          Terminal=false
+          Type=Application
+          Categories=AudioVideo;Music;Audio;Player;
+          EOF
+
+          cat > MuMuPai.AppDir/AppRun << 'APPRUN'
+          #!/bin/bash
+          HERE="$(dirname "$(readlink -f "$0")")"
+          export LD_LIBRARY_PATH="$HERE/usr/bin/lib:$LD_LIBRARY_PATH"
+          # Icon ins System kopieren
+          ICON_DIR="$HOME/.local/share/icons/hicolor/512x512/apps"
+          mkdir -p "$ICON_DIR" 2>/dev/null
+          cp "$HERE/mumupai.png" "$ICON_DIR/mumupai.png" 2>/dev/null
+          # ffplay Check
+          if ! command -v ffplay &>/dev/null; then
+            zenity --error --text="MuMuPai braucht ffmpeg!\n\nInstalliere mit:\nsudo apt install ffmpeg\nsudo dnf install ffmpeg\nsudo pacman -S ffmpeg" --title="MuMuPai" 2>/dev/null || echo "FEHLER: ffplay nicht gefunden! Bitte ffmpeg installieren."
+            exit 1
+          fi
+          exec "$HERE/usr/bin/mumupai" --disable-impeller "$@"
+          APPRUN
+          chmod +x MuMuPai.AppDir/AppRun
+
+          ARCH=x86_64 ./appimagetool MuMuPai.AppDir MuMuPai-x86_64.AppImage
+
+      - name: Upload Linux
+        uses: actions/upload-artifact@v4
+        with:
+          name: MuMuPai-Linux
+          path: MuMuPai-x86_64.AppImage
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.41.5'
+          channel: 'stable'
+
+      - name: Build Windows
+        run: |
+          cd Flutter
+          flutter pub get
+          flutter build windows --release
+
+      - name: Package Windows
+        run: |
+          Compress-Archive -Path Flutter\build\windows\x64\runner\Release\* -DestinationPath MuMuPai-Windows.zip
+        shell: pwsh
+
+      - name: Upload Windows
+        uses: actions/upload-artifact@v4
+        with:
+          name: MuMuPai-Windows
+          path: MuMuPai-Windows.zip
+
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.41.5'
+          channel: 'stable'
+
+      - name: Build macOS
+        run: |
+          cd Flutter
+          flutter pub get
+          flutter build macos --release
+
+      - name: Package macOS
+        run: |
+          cd Flutter/build/macos/Build/Products/Release
+          zip -r ../../../../../MuMuPai-macOS.zip mumupai.app || zip -r ../../../../../MuMuPai-macOS.zip MuMuPai.app || zip -r ../../../../../MuMuPai-macOS.zip *.app
+          ls -la ../../../../../MuMuPai-macOS.zip
+
+      - name: Upload macOS
+        uses: actions/upload-artifact@v4
+        with:
+          name: MuMuPai-macOS
+          path: Flutter/MuMuPai-macOS.zip
+
+  release:
+    needs: [build-linux, build-windows, build-macos]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/v')
+    permissions:
+      contents: write
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            MuMuPai-Linux/MuMuPai-x86_64.AppImage
+            MuMuPai-Windows/MuMuPai-Windows.zip
+            MuMuPai-macOS/MuMuPai-macOS.zip
+          body: |
+            ## 🎵 MuMuPai — Dein Musik-Player mit Streaming!
+
+            **Ein Player. Jedes Format. Überall streambar.**
+
+            ### ⬇️ Downloads
+
+            | Plattform | Datei | Anleitung |
+            |-----------|-------|-----------|
+            | 🐧 Linux | `MuMuPai-x86_64.AppImage` | Doppelklick! (ffmpeg nötig) |
+            | 🪟 Windows | `MuMuPai-Windows.zip` | Entpacken → mumupai.exe starten |
+            | 🍎 macOS | `MuMuPai-macOS.zip` | Entpacken → MuMuPai.app starten |
+
+            ### ✨ Features
+
+            - 🎵 Alle Audioformate (MP3, FLAC, WAV, OGG, AAC, M4A, WMA)
+            - 📡 Streaming mit Web-UI für jeden Browser
+            - 🌐 LAN + Internet Streaming
+            - 💾 Playlisten speichern & laden
+            - 🔊 Volume Control, Shuffle, Repeat
+            - 📥 Drag & Drop
+            - 🎨 Fancy UI mit Glow-Effekten
+
+            **Voraussetzung:** ffmpeg muss installiert sein (enthält ffplay + ffprobe)
+
+            ---
+            *MuMuPai by [Shinpai-AI](https://shinpai.de) | AGPL-3.0*
