@@ -155,6 +155,10 @@ class _MuMuPaiHomeState extends State<MuMuPaiHome> with WindowListener, TrayList
   String _playlistName = '';
   String? _playlistDir;
   static String get _configDir {
+    if (Platform.isWindows) {
+      final appData = Platform.environment['APPDATA'] ?? 'C:\\Users\\Public';
+      return '$appData\\MuMuPai';
+    }
     final home = Platform.environment['HOME'] ?? '/tmp';
     return '$home/.config/mumupai';
   }
@@ -163,6 +167,7 @@ class _MuMuPaiHomeState extends State<MuMuPaiHome> with WindowListener, TrayList
 
   // System Tray
   final TrayManager _trayManager = trayManager;
+  bool _trayReady = false;
 
   @override
   void initState() {
@@ -174,6 +179,7 @@ class _MuMuPaiHomeState extends State<MuMuPaiHome> with WindowListener, TrayList
     if (_isAndroid) _audioPlayer = ja.AudioPlayer();
     _loadSession();
     if (!_isAndroid) _initSystemTray();
+    if (!_isAndroid) _checkFirstLaunch();
   }
 
   Future<void> _initSystemTray() async {
@@ -195,7 +201,9 @@ class _MuMuPaiHomeState extends State<MuMuPaiHome> with WindowListener, TrayList
         MenuItem.separator(),
         MenuItem(label: 'Beenden', onClick: (_) async { _fullCleanup(); _trayManager.destroy(); await windowManager.destroy(); }),
       ]));
+      _trayReady = true;
     } catch (e) {
+      _trayReady = false;
       debugPrint('Tray init failed: $e');
     }
   }
@@ -207,12 +215,165 @@ class _MuMuPaiHomeState extends State<MuMuPaiHome> with WindowListener, TrayList
   void onTrayIconRightMouseDown() => _trayManager.popUpContextMenu();
 
   void _minimizeToTray() async {
-    await windowManager.hide();
+    if (_trayReady) {
+      await windowManager.hide();
+    } else {
+      // Tray nicht verfügbar → normales Minimieren
+      await windowManager.minimize();
+    }
   }
 
   void _showFromTray() async {
     await windowManager.show();
     await windowManager.focus();
+  }
+
+  // === FIRST LAUNCH INSTALL DIALOG ===
+  static String get _installedMarker => '$_configDir/.installed';
+
+  Future<void> _checkFirstLaunch() async {
+    // Warte bis UI bereit
+    await Future.delayed(const Duration(milliseconds: 500));
+    if (!mounted) return;
+    if (File(_installedMarker).existsSync()) return;
+
+    final choice = await showDialog<String>(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: bgCard,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Row(children: [
+          ClipRRect(borderRadius: BorderRadius.circular(8), child: Image.asset('assets/icon.png', width: 32, height: 32)),
+          const SizedBox(width: 12),
+          Text('MuMuPai', style: GoogleFonts.orbitron(color: fgGreen, fontSize: 18)),
+        ]),
+        content: const Text('Wie möchtest du MuMuPai nutzen?\n\nPortable: Einfach so starten, nix installieren.\nInstallieren: Desktop-Icon + Startmenü.',
+            style: TextStyle(color: fgWhite, fontSize: 13, height: 1.5)),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(ctx).pop('portable'),
+            child: const Text('Portable', style: TextStyle(color: fgGray))),
+          TextButton(onPressed: () => Navigator.of(ctx).pop('install'),
+            child: const Text('Installieren', style: TextStyle(color: fgGreen, fontWeight: FontWeight.bold))),
+        ],
+      ),
+    );
+
+    if (choice == 'install') {
+      await _performInstall();
+    }
+
+    // Marker setzen (auch bei portable — nicht nochmal fragen)
+    try {
+      final dir = Directory(_configDir);
+      if (!dir.existsSync()) dir.createSync(recursive: true);
+      await File(_installedMarker).writeAsString('mode=${choice ?? "portable"}\ndate=${DateTime.now()}');
+    } catch (_) {}
+  }
+
+  Future<void> _performInstall() async {
+    String? installDir;
+    if (Platform.isWindows) {
+      installDir = await FilePicker.platform.getDirectoryPath(dialogTitle: 'Installationsordner wählen');
+      installDir ??= '${Platform.environment['APPDATA'] ?? 'C:\\Users\\Public'}\\MuMuPai';
+    } else {
+      installDir = await FilePicker.platform.getDirectoryPath(dialogTitle: 'Installationsordner wählen');
+      installDir ??= '${Platform.environment['HOME']}/.local/share/mumupai';
+    }
+
+    try {
+      final dir = Directory(installDir);
+      if (!dir.existsSync()) dir.createSync(recursive: true);
+
+      // Exe/Binary kopieren
+      final exeDir = p.dirname(Platform.resolvedExecutable);
+      final sourceDir = Directory(exeDir);
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Installiere nach $installDir...')));
+      }
+
+      // Alle Dateien kopieren
+      for (var entity in sourceDir.listSync(recursive: true)) {
+        final relative = p.relative(entity.path, from: exeDir);
+        final target = p.join(installDir, relative);
+        if (entity is Directory) {
+          Directory(target).createSync(recursive: true);
+        } else if (entity is File) {
+          Directory(p.dirname(target)).createSync(recursive: true);
+          entity.copySync(target);
+        }
+      }
+
+      if (Platform.isWindows) {
+        await _createWindowsShortcuts(installDir);
+      } else if (Platform.isLinux) {
+        await _createLinuxDesktopEntry(installDir);
+      }
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('MuMuPai installiert in $installDir!')));
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Fehler: $e'), backgroundColor: Colors.red));
+      }
+    }
+  }
+
+  Future<void> _createWindowsShortcuts(String installDir) async {
+    try {
+      final desktop = Platform.environment['USERPROFILE'] ?? '';
+      final startMenu = '${Platform.environment['APPDATA']}\\Microsoft\\Windows\\Start Menu\\Programs';
+      final exePath = '$installDir\\mumupai.exe';
+
+      // PowerShell Shortcut-Erstellung
+      final script = '''
+\$shell = New-Object -ComObject WScript.Shell
+\$s1 = \$shell.CreateShortcut("$desktop\\Desktop\\MuMuPai.lnk")
+\$s1.TargetPath = "$exePath"
+\$s1.WorkingDirectory = "$installDir"
+\$s1.Save()
+\$s2 = \$shell.CreateShortcut("$startMenu\\MuMuPai.lnk")
+\$s2.TargetPath = "$exePath"
+\$s2.WorkingDirectory = "$installDir"
+\$s2.Save()
+''';
+      await Process.run('powershell', ['-Command', script]);
+    } catch (_) {}
+  }
+
+  Future<void> _createLinuxDesktopEntry(String installDir) async {
+    try {
+      final home = Platform.environment['HOME']!;
+      final desktopDir = '$home/.local/share/applications';
+      final iconDir = '$home/.local/share/icons/hicolor/512x512/apps';
+      final binDir = '$home/.local/bin';
+      Directory(desktopDir).createSync(recursive: true);
+      Directory(iconDir).createSync(recursive: true);
+      Directory(binDir).createSync(recursive: true);
+
+      // Desktop Entry
+      await File('$desktopDir/mumupai.desktop').writeAsString(
+        '[Desktop Entry]\nName=MuMuPai\nComment=Musik-Player mit Streaming! by Shinpai-AI\n'
+        'Exec=$installDir/mumupai --disable-impeller\nIcon=mumupai\n'
+        'Terminal=false\nType=Application\nCategories=AudioVideo;Music;Audio;Player;\n');
+
+      // Icon
+      final iconSrc = '$installDir/data/flutter_assets/assets/icon.png';
+      if (File(iconSrc).existsSync()) File(iconSrc).copySync('$iconDir/mumupai.png');
+
+      // CLI Launcher
+      await File('$binDir/mumupai').writeAsString('#!/bin/bash\nexec "$installDir/mumupai" --disable-impeller "\$@"\n');
+      await Process.run('chmod', ['+x', '$binDir/mumupai']);
+
+      // Caches
+      Process.run('update-desktop-database', [desktopDir]);
+      Process.run('gtk-update-icon-cache', ['-f', '-t', '$home/.local/share/icons/hicolor']);
+    } catch (_) {}
   }
 
   @override
