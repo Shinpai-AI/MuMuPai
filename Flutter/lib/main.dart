@@ -9,6 +9,7 @@ import 'package:flutter/services.dart';
 import 'package:path/path.dart' as p;
 import 'package:tray_manager/tray_manager.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:just_audio/just_audio.dart' as ja;
 
 Future<String?> getPublicIP() async {
   for (final url in ['https://api.ipify.org', 'https://ifconfig.me/ip']) {
@@ -48,13 +49,15 @@ String _findBundledBinary(String name) {
   return name;
 }
 
-late final String ffplayBin;
-late final String ffprobeBin;
+String ffplayBin = 'ffplay';
+String ffprobeBin = 'ffprobe';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  ffplayBin = _findBundledBinary('ffplay');
-  ffprobeBin = _findBundledBinary('ffprobe');
+  if (!(Platform.isAndroid || Platform.isIOS)) {
+    ffplayBin = _findBundledBinary('ffplay');
+    ffprobeBin = _findBundledBinary('ffprobe');
+  }
 
   if (Platform.isLinux || Platform.isMacOS) {
     ProcessSignal.sigterm.watch().listen((_) { _globalCleanup(); exit(0); });
@@ -122,6 +125,8 @@ class MuMuPaiHome extends StatefulWidget {
 
 class _MuMuPaiHomeState extends State<MuMuPaiHome> with WindowListener, TrayListener {
   Process? _playerProcess;
+  ja.AudioPlayer? _audioPlayer; // Android/iOS Player
+  bool get _isAndroid => Platform.isAndroid || Platform.isIOS;
   List<String> playlist = [];
   int currentIndex = -1;
   bool isPlaying = false;
@@ -158,10 +163,13 @@ class _MuMuPaiHomeState extends State<MuMuPaiHome> with WindowListener, TrayList
   @override
   void initState() {
     super.initState();
-    windowManager.addListener(this);
-    windowManager.setPreventClose(true);
+    if (!_isAndroid) {
+      windowManager.addListener(this);
+      windowManager.setPreventClose(true);
+    }
+    if (_isAndroid) _audioPlayer = ja.AudioPlayer();
     _loadSession();
-    _initSystemTray();
+    if (!_isAndroid) _initSystemTray();
   }
 
   Future<void> _initSystemTray() async {
@@ -212,22 +220,27 @@ class _MuMuPaiHomeState extends State<MuMuPaiHome> with WindowListener, TrayList
 
   void _fullCleanup() {
     _stopPlayer();
+    _audioPlayer?.dispose();
     _streamServer?.close(force: true);
     _streamServer = null;
-    _globalCleanup();
+    if (!_isAndroid) _globalCleanup();
   }
 
   @override
   void dispose() {
-    windowManager.removeListener(this);
+    if (!_isAndroid) windowManager.removeListener(this);
     _fullCleanup();
     super.dispose();
   }
 
   void _stopPlayer() {
-    if (_playerProcess != null) {
-      _playerProcess!.kill(ProcessSignal.sigkill);
-      _playerProcess = null;
+    if (_isAndroid) {
+      _audioPlayer?.stop();
+    } else {
+      if (_playerProcess != null) {
+        _playerProcess!.kill(ProcessSignal.sigkill);
+        _playerProcess = null;
+      }
     }
     _positionTimer?.cancel();
     _positionTimer = null;
@@ -426,44 +439,89 @@ class _MuMuPaiHomeState extends State<MuMuPaiHome> with WindowListener, TrayList
       final path = playlist[index];
       setState(() { currentIndex = index; isPlaying = true; position = Duration(seconds: seekSeconds); });
 
-      try {
-        final probe = await Process.run(ffprobeBin, ['-v', 'quiet', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', path]);
-        final dur = double.tryParse(probe.stdout.toString().trim()) ?? 0;
-        if (mounted) setState(() => duration = Duration(milliseconds: (dur * 1000).round()));
-      } catch (_) {}
-
-      final args = ['-nodisp', '-autoexit', '-loglevel', 'quiet', '-volume', volume.round().toString()];
-      if (seekSeconds > 0) args.addAll(['-ss', seekSeconds.toString()]);
-      args.add(path);
-      _playerProcess = await Process.start(ffplayBin, args);
+      if (_isAndroid) {
+        await _playAndroid(path, seekSeconds);
+      } else {
+        await _playDesktop(path, seekSeconds);
+      }
       _saveSession();
-
-      final startTime = DateTime.now();
-      final startOffset = seekSeconds;
-      _positionTimer = Timer.periodic(const Duration(milliseconds: 500), (_) {
-        if (!isPlaying || !mounted) return;
-        final total = Duration(seconds: startOffset) + DateTime.now().difference(startTime);
-        setState(() => position = total);
-        if (total >= duration && duration.inSeconds > 0) { _stopPlayer(); _next(); }
-      });
-
-      _playerProcess!.exitCode.then((code) {
-        if (mounted && isPlaying && code == 0) { _stopPlayer(); setState(() => isPlaying = false); _next(); }
-      });
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Fehler: $e'), backgroundColor: Colors.red));
     }
   }
 
+  Future<void> _playAndroid(String path, int seekSeconds) async {
+    final player = _audioPlayer!;
+    await player.setFilePath(path);
+    final dur = player.duration;
+    if (dur != null && mounted) setState(() => duration = dur);
+    await player.setVolume(volume / 100);
+    if (seekSeconds > 0) await player.seek(Duration(seconds: seekSeconds));
+    player.play();
+
+    // Position-Updates via Stream
+    _positionTimer?.cancel();
+    player.positionStream.listen((pos) {
+      if (mounted && isPlaying) setState(() => position = pos);
+    });
+    player.durationStream.listen((dur) {
+      if (mounted && dur != null) setState(() => duration = dur);
+    });
+    player.playerStateStream.listen((state) {
+      if (state.processingState == ja.ProcessingState.completed && mounted) {
+        setState(() => isPlaying = false);
+        _next();
+      }
+    });
+  }
+
+  Future<void> _playDesktop(String path, int seekSeconds) async {
+    try {
+      final probe = await Process.run(ffprobeBin, ['-v', 'quiet', '-show_entries', 'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1', path]);
+      final dur = double.tryParse(probe.stdout.toString().trim()) ?? 0;
+      if (mounted) setState(() => duration = Duration(milliseconds: (dur * 1000).round()));
+    } catch (_) {}
+
+    final args = ['-nodisp', '-autoexit', '-loglevel', 'quiet', '-volume', volume.round().toString()];
+    if (seekSeconds > 0) args.addAll(['-ss', seekSeconds.toString()]);
+    args.add(path);
+    _playerProcess = await Process.start(ffplayBin, args);
+
+    final startTime = DateTime.now();
+    final startOffset = seekSeconds;
+    _positionTimer = Timer.periodic(const Duration(milliseconds: 500), (_) {
+      if (!isPlaying || !mounted) return;
+      final total = Duration(seconds: startOffset) + DateTime.now().difference(startTime);
+      setState(() => position = total);
+      if (total >= duration && duration.inSeconds > 0) { _stopPlayer(); _next(); }
+    });
+
+    _playerProcess!.exitCode.then((code) {
+      if (mounted && isPlaying && code == 0) { _stopPlayer(); setState(() => isPlaying = false); _next(); }
+    });
+  }
+
   void _togglePlay() {
     if (currentIndex < 0 && playlist.isNotEmpty) { _play(0); }
-    else if (isPlaying) { _stopPlayer(); setState(() => isPlaying = false); }
-    else if (currentIndex >= 0) { _play(currentIndex, seekSeconds: position.inSeconds); }
+    else if (isPlaying) {
+      if (_isAndroid) { _audioPlayer?.pause(); }
+      else { _stopPlayer(); }
+      setState(() => isPlaying = false);
+    }
+    else if (currentIndex >= 0) {
+      if (_isAndroid) { _audioPlayer?.play(); setState(() => isPlaying = true); }
+      else { _play(currentIndex, seekSeconds: position.inSeconds); }
+    }
   }
 
   void _seekTo(double value) {
     if (duration.inSeconds <= 0 || currentIndex < 0) return;
-    _play(currentIndex, seekSeconds: (value * duration.inSeconds).round());
+    if (_isAndroid) {
+      final seekPos = Duration(milliseconds: (value * duration.inMilliseconds).round());
+      _audioPlayer?.seek(seekPos);
+    } else {
+      _play(currentIndex, seekSeconds: (value * duration.inSeconds).round());
+    }
   }
 
   void _next() {
@@ -481,7 +539,11 @@ class _MuMuPaiHomeState extends State<MuMuPaiHome> with WindowListener, TrayList
 
   void _setVolume(double val) {
     setState(() => volume = val);
-    if (isPlaying && currentIndex >= 0) _play(currentIndex, seekSeconds: position.inSeconds);
+    if (_isAndroid) {
+      _audioPlayer?.setVolume(val / 100);
+    } else if (isPlaying && currentIndex >= 0) {
+      _play(currentIndex, seekSeconds: position.inSeconds);
+    }
     _saveSession();
   }
 
@@ -634,7 +696,7 @@ render();
   Widget build(BuildContext context) {
     return Scaffold(
       body: GestureDetector(
-        onPanStart: (_) => windowManager.startDragging(),
+        onPanStart: _isAndroid ? null : (_) => windowManager.startDragging(),
         child: Column(
           children: [
             // === HEADER BAR ===
@@ -645,7 +707,7 @@ render();
                   Text('MuMuPai', style: GoogleFonts.orbitron(fontSize: 11, color: fgGray, fontWeight: FontWeight.w500)),
                   const Spacer(),
                   _tinyBtn(isStreaming ? Icons.wifi : Icons.wifi_off, isStreaming ? fgGreenLight : fgGray, _toggleStreaming),
-                  _tinyBtn(Icons.arrow_downward, fgGray, _minimizeToTray),
+                  if (!_isAndroid) _tinyBtn(Icons.arrow_downward, fgGray, _minimizeToTray),
                 ],
               ),
             ),
