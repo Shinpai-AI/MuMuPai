@@ -36,15 +36,19 @@ void _globalCleanup() {
   }
 }
 
-// Bundled ffplay/ffprobe Pfade ermitteln
+// ffplay/ffprobe Pfade ermitteln
 String _findBundledBinary(String name) {
+  // Linux: System-Binary bevorzugen (kompatibel mit lokalen Libs)
+  if (Platform.isLinux) {
+    try {
+      final result = Process.runSync('which', [name]);
+      if (result.exitCode == 0) return result.stdout.toString().trim();
+    } catch (_) {}
+  }
+  // Windows/macOS: Bundled bevorzugen
   final exeDir = p.dirname(Platform.resolvedExecutable);
-  // Prüfe: neben der exe in ffmpeg/
   final bundled = p.join(exeDir, 'ffmpeg', Platform.isWindows ? '$name.exe' : name);
   if (File(bundled).existsSync()) return bundled;
-  // macOS: in .app/Contents/MacOS/ffmpeg/
-  final macBundle = p.join(exeDir, 'ffmpeg', name);
-  if (File(macBundle).existsSync()) return macBundle;
   // Fallback: System PATH
   return name;
 }

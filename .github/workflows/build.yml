@@ -29,14 +29,6 @@ jobs:
           flutter pub get
           flutter build linux --release
 
-      - name: Bundle ffplay + ffprobe
-        run: |
-          # ffplay und ffprobe ins Bundle kopieren
-          mkdir -p Flutter/build/linux/x64/release/bundle/ffmpeg
-          cp "$(which ffplay)" Flutter/build/linux/x64/release/bundle/ffmpeg/
-          cp "$(which ffprobe)" Flutter/build/linux/x64/release/bundle/ffmpeg/
-          chmod +x Flutter/build/linux/x64/release/bundle/ffmpeg/*
-
       - name: Build AppImage
         run: |
           curl -fsSL -o appimagetool https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
@@ -63,7 +55,14 @@ jobs:
           #!/bin/bash
           HERE="$(dirname "$(readlink -f "$0")")"
           export LD_LIBRARY_PATH="$HERE/usr/bin/lib:$LD_LIBRARY_PATH"
-          export PATH="$HERE/usr/bin/ffmpeg:$PATH"
+
+          # ffplay Check — braucht System-ffmpeg
+          if ! command -v ffplay &>/dev/null; then
+            zenity --error --title="MuMuPai" --width=400 \
+              --text="ffplay nicht gefunden!\n\nMuMuPai braucht ffmpeg zum Abspielen.\n\nInstalliere mit:\n  Fedora/Nobara:  sudo dnf install ffmpeg\n  Ubuntu/Debian:   sudo apt install ffmpeg\n  Arch/Manjaro:    sudo pacman -S ffmpeg" 2>/dev/null \
+              || echo -e "\n  MuMuPai braucht ffmpeg!\n  sudo dnf install ffmpeg\n  sudo apt install ffmpeg\n  sudo pacman -S ffmpeg\n"
+            exit 1
+          fi
           APPIMAGE_PATH="$(readlink -f "$0" 2>/dev/null || echo "$APPIMAGE")"
           DEFAULT_DIR="$HOME/.local/share/mumupai"
           MARKER="$HOME/.config/mumupai/.installed"
