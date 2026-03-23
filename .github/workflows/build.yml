@@ -64,9 +64,69 @@ jobs:
           HERE="$(dirname "$(readlink -f "$0")")"
           export LD_LIBRARY_PATH="$HERE/usr/bin/lib:$LD_LIBRARY_PATH"
           export PATH="$HERE/usr/bin/ffmpeg:$PATH"
+          APPIMAGE_PATH="$(readlink -f "$0" 2>/dev/null || echo "$APPIMAGE")"
+          INSTALL_DIR="$HOME/.local/share/mumupai"
+          MARKER="$HOME/.config/mumupai/.installed"
+
+          # === INSTALL CHECK ===
+          if [ ! -f "$MARKER" ] && [ -n "$APPIMAGE_PATH" ]; then
+            CHOICE=$(zenity --list --radiolist \
+              --title="MuMuPai" \
+              --text="Willkommen bei MuMuPai!\n\nWie möchtest du starten?" \
+              --column="" --column="Option" --column="Beschreibung" \
+              TRUE "portable" "Einfach starten (keine Installation)" \
+              FALSE "install" "Installieren (Desktop-Icon + Startmenü)" \
+              --width=450 --height=280 2>/dev/null)
+
+            if [ "$CHOICE" = "install" ]; then
+              echo "Installiere MuMuPai..."
+              mkdir -p "$INSTALL_DIR"
+              cp "$APPIMAGE_PATH" "$INSTALL_DIR/MuMuPai.AppImage" 2>/dev/null
+              chmod +x "$INSTALL_DIR/MuMuPai.AppImage"
+
+              # Desktop Entry
+              mkdir -p "$HOME/.local/share/applications"
+              cat > "$HOME/.local/share/applications/mumupai.desktop" << DEOF
+          [Desktop Entry]
+          Name=MuMuPai
+          Comment=Dein Musik-Player mit Streaming! by Shinpai-AI
+          Exec=$INSTALL_DIR/MuMuPai.AppImage
+          Icon=mumupai
+          Terminal=false
+          Type=Application
+          Categories=AudioVideo;Music;Audio;Player;
+          Keywords=music;player;streaming;mumupai;shinpai;
+          DEOF
+              chmod +x "$HOME/.local/share/applications/mumupai.desktop"
+
+              # Icon
+              ICON_DIR="$HOME/.local/share/icons/hicolor/512x512/apps"
+              mkdir -p "$ICON_DIR"
+              cp "$HERE/mumupai.png" "$ICON_DIR/mumupai.png" 2>/dev/null
+
+              # Launcher
+              mkdir -p "$HOME/.local/bin"
+              echo "#!/bin/bash" > "$HOME/.local/bin/mumupai"
+              echo "exec \"$INSTALL_DIR/MuMuPai.AppImage\" \"\$@\"" >> "$HOME/.local/bin/mumupai"
+              chmod +x "$HOME/.local/bin/mumupai"
+
+              # Update caches
+              update-desktop-database "$HOME/.local/share/applications" 2>/dev/null
+              gtk-update-icon-cache -f -t "$HOME/.local/share/icons/hicolor" 2>/dev/null
+
+              # Marker setzen
+              mkdir -p "$HOME/.config/mumupai"
+              echo "installed=$(date)" > "$MARKER"
+
+              zenity --info --text="MuMuPai installiert!\n\nStartmenü: MuMuPai\nTerminal: mumupai\n\nStarte jetzt..." --title="MuMuPai" --width=300 2>/dev/null
+            fi
+          fi
+
+          # === ICON (auch bei portable) ===
           ICON_DIR="$HOME/.local/share/icons/hicolor/512x512/apps"
           mkdir -p "$ICON_DIR" 2>/dev/null
           cp "$HERE/mumupai.png" "$ICON_DIR/mumupai.png" 2>/dev/null
+
           exec "$HERE/usr/bin/mumupai" --disable-impeller "$@"
           APPRUN
           chmod +x MuMuPai.AppDir/AppRun
