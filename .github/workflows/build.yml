@@ -63,12 +63,12 @@ jobs:
               || echo -e "\n  MuMuPai braucht ffmpeg!\n  sudo dnf install ffmpeg\n  sudo apt install ffmpeg\n  sudo pacman -S ffmpeg\n"
             exit 1
           fi
-          APPIMAGE_PATH="$(readlink -f "$0" 2>/dev/null || echo "$APPIMAGE")"
+          # $APPIMAGE = Pfad zur .AppImage Datei (wird von AppImage Runtime gesetzt)
           DEFAULT_DIR="$HOME/.local/share/mumupai"
           MARKER="$HOME/.config/mumupai/.installed"
 
           # === FIRST LAUNCH: Portable oder Install? ===
-          if [ ! -f "$MARKER" ] && [ -n "$APPIMAGE_PATH" ]; then
+          if [ ! -f "$MARKER" ] && [ -n "$APPIMAGE" ]; then
             CHOICE=$(zenity --list --radiolist \
               --title="MuMuPai" \
               --text="Willkommen bei MuMuPai!\n\nWie möchtest du starten?" \
@@ -86,7 +86,7 @@ jobs:
 
               echo "Installiere nach: $INSTALL_DIR"
               mkdir -p "$INSTALL_DIR"
-              cp "$APPIMAGE_PATH" "$INSTALL_DIR/MuMuPai.AppImage" 2>/dev/null
+              cp "$APPIMAGE" "$INSTALL_DIR/MuMuPai.AppImage" 2>/dev/null
               chmod +x "$INSTALL_DIR/MuMuPai.AppImage"
 
               # Desktop Entry
