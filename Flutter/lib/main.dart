@@ -814,6 +814,7 @@ body{background:#0a1a0a;color:#e8f0e4;font-family:-apple-system,BlinkMacSystemFo
   <audio id="audio" preload="none"></audio>
   <input type="range" class="progress" id="progress" min="0" max="1000" value="0">
   <div class="time"><span id="timeCur">0:00</span><span id="timeDur">0:00</span></div>
+  <div style="display:flex;align-items:center;gap:8px;margin:8px 0 4px;padding:0 4px;"><span style="font-size:18px;">🔈</span><input type="range" class="progress" id="volSlider" min="0" max="100" value="80" style="flex:1;" oninput="setVol(this.value)"><span id="volLabel" style="color:#7a9a7a;font-size:0.75em;min-width:32px;text-align:right;">80%</span></div>
   <div class="ctrls">
     <button id="btnShuffle" title="Shuffle" onclick="toggleShuffle()"><svg viewBox="0 0 24 24"><path d="M10.59 9.17L5.41 4 4 5.41l5.17 5.17 1.42-1.41zM14.5 4l2.04 2.04L4 18.59 5.41 20 17.96 7.46 20 9.5V4h-5.5zm.33 9.41l-1.41 1.41 3.13 3.13L14.5 20H20v-5.5l-2.04 2.04-3.13-3.13z"/></svg></button>
     <button title="Vorheriger" onclick="prev()"><svg viewBox="0 0 24 24"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg></button>
@@ -840,6 +841,8 @@ function next(){if(!songs.length)return;if(repeat){playSong(cur);return;}if(shuf
 function prev(){if(!songs.length)return;if(audio.currentTime>3){audio.currentTime=0;return;}playSong((cur-1+songs.length)%songs.length);}
 function toggleShuffle(){shuffle=!shuffle;document.getElementById('btnShuffle').classList.toggle('active',shuffle);}
 function toggleRepeat(){repeat=!repeat;document.getElementById('btnRepeat').classList.toggle('active',repeat);}
+function setVol(v){audio.volume=v/100;document.getElementById('volLabel').textContent=v+'%';}
+audio.volume=0.8;
 audio.addEventListener('ended',()=>{next();});audio.addEventListener('play',()=>{updatePlayBtn();});audio.addEventListener('pause',()=>{updatePlayBtn();});
 render();
 </script></body></html>''';
