@@ -413,14 +413,19 @@ class _MuMuPaiHomeState extends State<MuMuPaiHome> with WindowListener, TrayList
     super.dispose();
   }
 
+  int _playGeneration = 0; // Track-Wechsel Zähler gegen Zombie-Callbacks
+
   void _stopPlayer() {
+    _playGeneration++; // invalidiert alle alten Callbacks
     if (_isAndroid) {
       _audioPlayer?.stop();
     } else {
       if (_playerProcess != null) {
-        _playerProcess!.kill(ProcessSignal.sigkill);
+        try { _playerProcess!.kill(ProcessSignal.sigkill); } catch (_) {}
         _playerProcess = null;
       }
+      // Sicherheits-Cleanup: ALLE ffplay Zombies killen
+      try { Process.runSync('pkill', ['-f', 'ffplay.*-nodisp.*-autoexit']); } catch (_) {}
     }
     _positionTimer?.cancel();
     _positionTimer = null;
@@ -666,17 +671,20 @@ class _MuMuPaiHomeState extends State<MuMuPaiHome> with WindowListener, TrayList
     if (seekSeconds > 0) args.addAll(['-ss', seekSeconds.toString()]);
     args.add(path);
     _playerProcess = await Process.start(ffplayBin, args);
+    final thisGeneration = _playGeneration; // snapshot für diesen Track
 
     final startTime = DateTime.now();
     final startOffset = seekSeconds;
     _positionTimer = Timer.periodic(const Duration(milliseconds: 500), (_) {
-      if (!isPlaying || !mounted) return;
+      if (!isPlaying || !mounted || _playGeneration != thisGeneration) return;
       final total = Duration(seconds: startOffset) + DateTime.now().difference(startTime);
       setState(() => position = total);
       if (total >= duration && duration.inSeconds > 0) { _stopPlayer(); _next(); }
     });
 
     _playerProcess!.exitCode.then((code) {
+      // NUR reagieren wenn wir noch der AKTUELLE Track sind!
+      if (_playGeneration != thisGeneration) return; // Zombie-Callback → ignorieren!
       if (mounted && isPlaying && code == 0) { _stopPlayer(); setState(() => isPlaying = false); _next(); }
     });
   }
